@@ -1,0 +1,37 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extName__",
+  "version": "1.1.0",
+  "description": "__MSG_extDescription__",
+  "default_locale": "it",
+  "permissions": ["storage", "sidePanel", "alarms", "tabs", "contextMenus", "notifications", "scripting", "activeTab"],
+  "optional_host_permissions": ["https://*/*", "http://*/*"],
+  "commands": {
+    "add-current-tab": {
+      "suggested_key": { "default": "Ctrl+Shift+K", "mac": "Command+Shift+K" },
+      "description": "__MSG_addCurrentTabCommand__"
+    }
+  },
+  "action": {
+    "default_title": "__MSG_extName__",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "32": "icons/icon32.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "options_page": "options.html",
+  "background": {
+    "service_worker": "background.js"
+  },
+  "icons": {
+    "16": "icons/icon16.png",
+    "32": "icons/icon32.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  }
+}

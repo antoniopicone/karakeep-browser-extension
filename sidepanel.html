@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="it">
+<head>
+<meta charset="UTF-8" />
+<title>Elenco lettura</title>
+<link rel="stylesheet" href="sidepanel.css" />
+</head>
+<body>
+  <div id="app">
+    <div id="searchBar">
+      <input id="searchInput" type="text" data-i18n-placeholder="searchPlaceholder" autocomplete="off" />
+      <button id="addCurrentTab" data-i18n-title="addCurrentTabTitle">+</button>
+    </div>
+
+    <div id="content">
+      <div id="notConfigured" class="hidden">
+        <p data-i18n="notConfiguredText"></p>
+        <button id="openOptions" data-i18n="openOptionsBtn"></button>
+      </div>
+      <div id="loading" class="hidden" data-i18n="loadingText"></div>
+      <div id="errorBox" class="hidden"></div>
+      <ul id="linkList"></ul>
+      <div id="sentinel"></div>
+      <div id="loadingMore" class="hidden" data-i18n="loadingMoreText"></div>
+      <div id="emptyState" class="hidden" data-i18n="emptyStateText"></div>
+    </div>
+
+    <div id="panelContextMenu" class="hidden" role="menu">
+      <button id="panelMenuOpen" role="menuitem" data-i18n="panelMenuOpen"></button>
+      <button id="panelMenuDelete" role="menuitem" class="danger" data-i18n="panelMenuDelete"></button>
+    </div>
+  </div>
+
+  <script src="sidepanel.js"></script>
+</body>
+</html>
