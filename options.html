@@ -36,20 +36,30 @@
   .ok { color: #067647; }
   .err { color: #b42318; }
   .hint { font-size: 12px; color: #667085; margin-top: 4px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 22px; }
+  .checkbox-row input { width: auto; margin: 0; }
+  .checkbox-row label { display: inline; margin: 0; font-weight: 600; font-size: 13px; }
 </style>
 </head>
 <body>
   <h1 data-i18n="optionsTitle"></h1>
 
-  <label for="baseUrl" data-i18n="baseUrlLabel"></label>
-  <input id="baseUrl" type="text" placeholder="https://karakeep.tuodominio.it" />
-  <div class="hint" data-i18n="baseUrlHint"></div>
+  <label for="port" data-i18n="portLabel"></label>
+  <input id="port" type="number" min="1" max="65535" placeholder="47100" />
+  <div class="hint" data-i18n="portHint"></div>
 
-  <label for="apiKey" data-i18n="apiKeyLabel"></label>
-  <input id="apiKey" type="password" data-i18n-placeholder="apiKeyPlaceholder" />
+  <label for="authToken" data-i18n="authTokenLabel"></label>
+  <input id="authToken" type="password" data-i18n-placeholder="authTokenPlaceholder" />
+  <div class="hint" data-i18n="authTokenHint"></div>
 
   <button id="save" data-i18n="saveBtn"></button>
   <div id="status"></div>
+
+  <div class="checkbox-row">
+    <input id="crawlToggle" type="checkbox" />
+    <label for="crawlToggle" data-i18n="crawlToggleLabel"></label>
+  </div>
+  <div class="hint" data-i18n="crawlToggleHint"></div>
 
   <script src="options.js"></script>
 </body>

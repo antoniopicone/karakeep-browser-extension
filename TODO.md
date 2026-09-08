@@ -1,0 +1,2 @@
+- port can be random
+- adding a link does not trigger list reload

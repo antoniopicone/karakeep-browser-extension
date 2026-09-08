@@ -1,6 +1,8 @@
-const baseUrlInput = document.getElementById('baseUrl');
-const apiKeyInput = document.getElementById('apiKey');
+const portInput = document.getElementById('port');
+const authTokenInput = document.getElementById('authToken');
 const statusEl = document.getElementById('status');
+const crawlToggle = document.getElementById('crawlToggle');
+const CRAWL_ORIGINS = ['https://*/*', 'http://*/*'];
 
 function applyI18n() {
   document.title = chrome.i18n.getMessage('optionsTitle');
@@ -14,14 +16,6 @@ function applyI18n() {
   });
 }
 
-function normalizeBaseUrl(raw) {
-  let url = raw.trim();
-  if (!/^https?:\/\//i.test(url)) {
-    url = 'https://' + url;
-  }
-  return url.replace(/\/+$/, ''); // remove trailing slashes
-}
-
 function setStatus(msg, ok) {
   statusEl.textContent = msg;
   statusEl.className = ok ? 'ok' : 'err';
@@ -30,36 +24,50 @@ function setStatus(msg, ok) {
 applyI18n();
 
 // Pre-fill the fields with the saved values
-chrome.storage.local.get(['baseUrl', 'apiKey'], (data) => {
-  if (data.baseUrl) baseUrlInput.value = data.baseUrl;
-  if (data.apiKey) apiKeyInput.value = data.apiKey;
+chrome.storage.local.get(['port', 'authToken'], (data) => {
+  if (data.port) portInput.value = data.port;
+  if (data.authToken) authTokenInput.value = data.authToken;
 });
 
-document.getElementById('save').addEventListener('click', async () => {
-  const baseUrl = normalizeBaseUrl(baseUrlInput.value);
-  const apiKey = apiKeyInput.value.trim();
+document.getElementById('save').addEventListener('click', () => {
+  const port = parseInt(portInput.value, 10);
+  const authToken = authTokenInput.value.trim();
 
-  if (!baseUrl || !apiKey) {
+  if (!port) {
     setStatus(chrome.i18n.getMessage('statusMissingFields'), false);
     return;
   }
-
-  let origin;
-  try {
-    origin = new URL(baseUrl).origin + '/*';
-  } catch (e) {
-    setStatus(chrome.i18n.getMessage('statusInvalidUrl'), false);
+  if (port < 1 || port > 65535) {
+    setStatus(chrome.i18n.getMessage('statusInvalidPort'), false);
     return;
   }
 
-  // Requests the host permission ONLY for this domain, at runtime.
-  chrome.permissions.request({ origins: [origin] }, (granted) => {
-    if (!granted) {
-      setStatus(chrome.i18n.getMessage('statusPermissionDenied'), false);
-      return;
-    }
-    chrome.storage.local.set({ baseUrl, apiKey }, () => {
-      setStatus(chrome.i18n.getMessage('statusSaved'), true);
-    });
+  // No permission request needed here: http://127.0.0.1/* is a fixed
+  // manifest host permission (Chrome match patterns have no port field, so
+  // it already covers syncd on any port), granted once at install time.
+  chrome.storage.local.set({ port, authToken }, () => {
+    setStatus(chrome.i18n.getMessage('statusSaved'), true);
   });
+});
+
+// The mini-crawler's broad host permission (any http/https origin, needed
+// to fetch a bookmarked page's own HTML) can ONLY be requested during a
+// real user gesture in a page context — calling chrome.permissions.request
+// from the background service worker always fails with "This function must
+// be called during a user gesture", since service workers aren't part of
+// the DOM's gesture-propagation chain. This checkbox click is that gesture;
+// background.js only ever checks chrome.permissions.contains, never
+// requests.
+chrome.permissions.contains({ origins: CRAWL_ORIGINS }, (has) => {
+  crawlToggle.checked = has;
+});
+
+crawlToggle.addEventListener('change', () => {
+  if (crawlToggle.checked) {
+    chrome.permissions.request({ origins: CRAWL_ORIGINS }, (granted) => {
+      crawlToggle.checked = granted; // snap back if the user declined the prompt
+    });
+  } else {
+    chrome.permissions.remove({ origins: CRAWL_ORIGINS });
+  }
 });

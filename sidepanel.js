@@ -2,12 +2,10 @@ const els = {
   search: document.getElementById('searchInput'),
   list: document.getElementById('linkList'),
   loading: document.getElementById('loading'),
-  loadingMore: document.getElementById('loadingMore'),
   error: document.getElementById('errorBox'),
   empty: document.getElementById('emptyState'),
   notConfigured: document.getElementById('notConfigured'),
   openOptions: document.getElementById('openOptions'),
-  sentinel: document.getElementById('sentinel'),
   content: document.getElementById('content'),
   addCurrentTab: document.getElementById('addCurrentTab'),
   panelContextMenu: document.getElementById('panelContextMenu'),
@@ -15,7 +13,6 @@ const els = {
   panelMenuDelete: document.getElementById('panelMenuDelete'),
 };
 
-const PAGE_SIZE = 30;
 const NO_IMAGE_SVG =
   'data:image/svg+xml;utf8,' +
   encodeURIComponent(
@@ -32,12 +29,11 @@ const ADD_ICON_SVG =
   '<line x1="9" y1="9.5" x2="15" y2="9.5"/>' +
   '</svg>';
 
-let config = { baseUrl: null, apiKey: null };
+let config = { port: null, authToken: null };
 let currentQuery = '';
-let nextCursor = null;
 let requestSeq = 0;
 let isFetching = false;
-const assetUrlCache = new Map(); // assetId -> Promise<objectURL|null>
+let allLinks = []; // everything syncd currently has, newest first
 
 function applyI18n() {
   document.title = chrome.i18n.getMessage('extName');
@@ -61,11 +57,10 @@ function applyI18n() {
 function show(el) { el.classList.remove('hidden'); }
 function hide(el) { el.classList.add('hidden'); }
 
-function setState({ loading = false, loadingMore = false, error = null, notConfigured = false } = {}) {
-  hide(els.loading); hide(els.error); hide(els.notConfigured); hide(els.empty); hide(els.loadingMore);
+function setState({ loading = false, error = null, notConfigured = false } = {}) {
+  hide(els.loading); hide(els.error); hide(els.notConfigured); hide(els.empty);
   if (notConfigured) { show(els.notConfigured); return; }
   if (loading) show(els.loading);
-  if (loadingMore) show(els.loadingMore);
   if (error) { els.error.textContent = error; show(els.error); }
 }
 
@@ -74,66 +69,18 @@ function hostFromUrl(url) {
   catch { return ''; }
 }
 
-function extractLink(bookmark) {
-  const content = bookmark.content || {};
-  const url = content.url || bookmark.url || '';
-  const title = bookmark.title || content.title || url;
-  const favicon = content.favicon || null;
-  const imageUrl = content.imageUrl || null;
-  const imageAssetId = content.imageAssetId || content.screenshotAssetId || null;
-  const description = bookmark.summary || content.description || null;
-  const tags = (bookmark.tags || []).map((t) => t.name).filter(Boolean);
-  return { id: bookmark.id, url, title, favicon, imageUrl, imageAssetId, description, tags };
-}
-
-// Assets (screenshot/local image) require the Authorization header, so they
-// can't simply be set as the src of an <img>: we download them and turn
-// them into blob URLs, with a small in-memory cache.
-async function resolveAssetUrl(assetId) {
-  if (assetUrlCache.has(assetId)) return assetUrlCache.get(assetId);
-
-  const promise = (async () => {
-    try {
-      const res = await fetch(`${config.baseUrl}/api/v1/assets/${assetId}`, {
-        headers: { Authorization: `Bearer ${config.apiKey}` },
-      });
-      if (!res.ok) return null;
-      const blob = await res.blob();
-      return URL.createObjectURL(blob);
-    } catch {
-      return null;
-    }
-  })();
-
-  assetUrlCache.set(assetId, promise);
-  return promise;
+function parseValue(raw) {
+  try { return JSON.parse(raw); } catch { return null; }
 }
 
 function setThumb(imgEl, link) {
   if (link.imageUrl) {
     imgEl.src = link.imageUrl;
     imgEl.classList.remove('no-image');
-    imgEl.onerror = () => fallbackToAsset(imgEl, link);
-    return;
+    imgEl.onerror = () => showNoImage(imgEl);
+  } else {
+    showNoImage(imgEl);
   }
-  if (link.imageAssetId) {
-    fallbackToAsset(imgEl, link);
-    return;
-  }
-  showNoImage(imgEl);
-}
-
-function fallbackToAsset(imgEl, link) {
-  if (!link.imageAssetId) { showNoImage(imgEl); return; }
-  resolveAssetUrl(link.imageAssetId).then((objUrl) => {
-    if (objUrl) {
-      imgEl.src = objUrl;
-      imgEl.onerror = () => showNoImage(imgEl);
-      imgEl.classList.remove('no-image');
-    } else {
-      showNoImage(imgEl);
-    }
-  });
 }
 
 function showNoImage(imgEl) {
@@ -148,7 +95,6 @@ function createLinkEl(link) {
   a.href = link.url;
   a.target = '_blank';
   a.rel = 'noopener noreferrer';
-  a.dataset.bookmarkId = link.id || '';
   a.dataset.url = link.url;
 
   const thumb = document.createElement('img');
@@ -161,7 +107,7 @@ function createLinkEl(link) {
 
   const titleEl = document.createElement('div');
   titleEl.className = 'link-title';
-  titleEl.textContent = link.title;
+  titleEl.textContent = link.title || link.url;
 
   const metaEl = document.createElement('div');
   metaEl.className = 'link-meta';
@@ -205,19 +151,13 @@ function createLinkEl(link) {
   return a;
 }
 
-function renderItems(bookmarks, append) {
-  if (!append) els.list.innerHTML = '';
-
-  const links = bookmarks
-    .filter((b) => (b.content && b.content.type === 'link') || b.url)
-    .map(extractLink)
-    .filter((l) => l.url);
-
-  if (!append && links.length === 0) {
+function renderItems(links) {
+  els.list.innerHTML = '';
+  if (links.length === 0) {
     show(els.empty);
     return;
   }
-
+  hide(els.empty);
   const frag = document.createDocumentFragment();
   for (const link of links) {
     frag.appendChild(createLinkEl(link));
@@ -225,56 +165,57 @@ function renderItems(bookmarks, append) {
   els.list.appendChild(frag);
 }
 
-async function apiFetch(path, params) {
-  const url = new URL(config.baseUrl + '/api/v1' + path);
-  Object.entries(params || {}).forEach(([k, v]) => {
-    if (v !== undefined && v !== null && v !== '') url.searchParams.set(k, v);
-  });
+function renderFiltered() {
+  const q = currentQuery.toLowerCase();
+  const filtered = !q
+    ? allLinks
+    : allLinks.filter((l) =>
+        (l.title || '').toLowerCase().includes(q) ||
+        (l.url || '').toLowerCase().includes(q) ||
+        (l.description || '').toLowerCase().includes(q) ||
+        (l.tags || []).some((t) => t.toLowerCase().includes(q))
+      );
+  renderItems(filtered);
+}
 
-  const res = await fetch(url.toString(), {
-    headers: {
-      Authorization: `Bearer ${config.apiKey}`,
-      Accept: 'application/json',
-    },
-  });
+async function apiFetch(path) {
+  const url = `http://127.0.0.1:${config.port}${path}`;
+  const headers = { Accept: 'application/json' };
+  if (config.authToken) headers.Authorization = `Bearer ${config.authToken}`;
 
+  const res = await fetch(url, { headers });
   if (!res.ok) {
     throw new Error(chrome.i18n.getMessage('fetchErrorText'));
   }
   return res.json();
 }
 
-async function loadPage({ reset }) {
+// Everything comes from a single local call: no cursor, no server-side
+// search — syncd has no concept of either, and a personal bookmark list is
+// small enough that filtering the whole thing in the panel is instant.
+async function loadPage() {
   if (isFetching) return;
   const seq = ++requestSeq;
-  if (reset) nextCursor = null;
-  if (!reset && !nextCursor) return;
 
   isFetching = true;
-  setState({ loading: reset, loadingMore: !reset });
+  setState({ loading: true });
 
   try {
-    const path = currentQuery ? '/bookmarks/search' : '/bookmarks';
-    const params = currentQuery
-      ? { q: currentQuery, limit: PAGE_SIZE, cursor: nextCursor }
-      : { limit: PAGE_SIZE, cursor: nextCursor, archived: 'false' };
-
-    const data = await apiFetch(path, params);
+    const data = await apiFetch('/v1/state');
     if (seq !== requestSeq) return;
 
+    allLinks = (data.entries || [])
+      .map((e) => parseValue(e.value))
+      .filter((v) => v && v.url)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+
     setState({});
-    renderItems(data.bookmarks || [], !reset);
-    nextCursor = data.nextCursor || null;
+    renderFiltered();
 
-    if ((data.bookmarks || []).length === 0 && reset) {
-      show(els.empty);
-    }
-
-    // Opening the panel on the "main" list (no active search) counts as
-    // having seen everything: update the reference and clear badge/banner.
-    if (reset && !currentQuery && (data.bookmarks || []).length) {
-      const newestCreatedAt = data.bookmarks[0].createdAt;
-      chrome.storage.local.set({ lastSeenCreatedAt: newestCreatedAt, pendingNewCount: 0 });
+    // Opening the panel counts as having seen everything: update the
+    // reference and clear badge/banner.
+    if (allLinks.length) {
+      chrome.storage.local.set({ lastSeenUpdatedAt: allLinks[0].updatedAt, pendingNewCount: 0 });
       chrome.action.setBadgeText({ text: '' });
     }
   } catch (err) {
@@ -285,13 +226,9 @@ async function loadPage({ reset }) {
   }
 }
 
-let debounceTimer;
 els.search.addEventListener('input', () => {
-  clearTimeout(debounceTimer);
-  debounceTimer = setTimeout(() => {
-    currentQuery = els.search.value.trim();
-    loadPage({ reset: true });
-  }, 300);
+  currentQuery = els.search.value.trim();
+  renderFiltered(); // local filter over an already-fetched list: no debounce needed
 });
 
 els.openOptions.addEventListener('click', () => chrome.runtime.openOptionsPage());
@@ -300,46 +237,37 @@ els.openOptions.addEventListener('click', () => chrome.runtime.openOptionsPage()
 // message when it detects new links: we reload the list silently, with no
 // banner or confirmation from the user.
 chrome.runtime.onMessage.addListener((msg) => {
-  if (msg && msg.type === 'karakeep-new-links') {
+  if (msg && msg.type === 'syncd-new-links') {
     chrome.action.setBadgeText({ text: '' });
-    loadPage({ reset: true });
-  } else if (msg && msg.type === 'karakeep-optimistic-add') {
+    loadPage();
+  } else if (msg && msg.type === 'syncd-optimistic-add') {
     prependOptimisticLink(msg.link);
-  } else if (msg && msg.type === 'karakeep-bookmark-deleted') {
-    removeLinkFromDom(msg.id);
+  } else if (msg && msg.type === 'syncd-bookmark-deleted') {
+    removeLinkFromDom(msg.url);
   }
 });
 
 // Immediately shows the just-added entry with the metadata extracted
-// client-side (title/description/image/favicon), without waiting for either
-// a network call or Karakeep's crawler. Once server-side crawling finishes,
-// the normal automatic reload replaces it with the "official" one.
-function prependOptimisticLink(rawLink) {
+// client-side (title/description/image/favicon), without waiting for
+// either a network call or the mini-crawler. Once that finishes, the
+// normal reload (triggered by the background script) replaces it with the
+// enriched version.
+function prependOptimisticLink(link) {
   if (currentQuery) return; // don't disturb an ongoing search
   hide(els.empty);
-  const link = {
-    id: '',
-    url: rawLink.url,
-    title: rawLink.title || rawLink.url,
-    favicon: rawLink.favicon || null,
-    imageUrl: rawLink.imageUrl || null,
-    imageAssetId: null,
-    description: rawLink.description || null,
-    tags: [],
-  };
   const el = createLinkEl(link);
   el.classList.add('is-pending');
   els.list.insertBefore(el, els.list.firstChild);
 }
 
-function removeLinkFromDom(bookmarkId) {
-  const el = els.list.querySelector(`.link-item[data-bookmark-id="${CSS.escape(bookmarkId)}"]`);
+function removeLinkFromDom(url) {
+  const el = els.list.querySelector(`.link-item[data-url="${CSS.escape(url)}"]`);
   if (el) el.remove();
   if (!els.list.children.length) show(els.empty);
 }
 
 async function addCurrentTab() {
-  if (!config.baseUrl || !config.apiKey) {
+  if (!config.port) {
     chrome.runtime.openOptionsPage();
     return;
   }
@@ -350,8 +278,8 @@ async function addCurrentTab() {
       throw new Error('Invalid tab URL');
     }
 
-    // Delegate the add to the background: it also handles polling the
-    // crawling status and reloads the list again once metadata is ready.
+    // Delegate the add to the background: it also handles the mini-crawler
+    // fallback and notifies us again once metadata is enriched.
     const response = await chrome.runtime.sendMessage({
       type: 'add-bookmark',
       url: tab.url,
@@ -361,8 +289,8 @@ async function addCurrentTab() {
 
     if (!response || !response.success) throw new Error('Add failed');
     setAddButtonState('success');
-    // The background will notify us (karakeep-new-links) both right away
-    // and after crawling: no need to reload manually here.
+    // The background will notify us (syncd-new-links) both right away and
+    // after the mini-crawler runs: no need to reload manually here.
   } catch (err) {
     console.error('Adding current page failed:', err);
     setAddButtonState('error');
@@ -382,18 +310,6 @@ function setAddButtonState(state) {
 
 els.addCurrentTab.addEventListener('click', addCurrentTab);
 
-// Infinite scroll: when the sentinel at the bottom of the list enters the
-// panel's viewport, we automatically load the next page.
-const observer = new IntersectionObserver(
-  (entries) => {
-    if (entries[0].isIntersecting && nextCursor && !isFetching) {
-      loadPage({ reset: false });
-    }
-  },
-  { root: els.content, rootMargin: '200px' }
-);
-observer.observe(els.sentinel);
-
 async function init() {
   applyI18n();
 
@@ -402,31 +318,31 @@ async function init() {
   chrome.runtime.connect({ name: 'sidepanel' });
 
   const data = await new Promise((resolve) =>
-    chrome.storage.local.get(['baseUrl', 'apiKey'], resolve)
+    chrome.storage.local.get(['port', 'authToken'], resolve)
   );
 
   setAddButtonState('idle');
 
-  if (!data.baseUrl || !data.apiKey) {
+  if (!data.port) {
     setState({ notConfigured: true });
     return;
   }
 
   config = data;
-  await loadPage({ reset: true });
+  await loadPage();
 }
 
 chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes.baseUrl || changes.apiKey)) {
+  if (area === 'local' && (changes.port || changes.authToken)) {
     init();
   }
 });
 
 // Custom context menu on the list's links: right-click → "Open in new tab" /
 // "Remove from Reading List". We don't use the native chrome.contextMenus
-// API for this because it only exposes the link's href, not custom data
-// like the bookmark's id on Karakeep.
-let contextMenuTarget = null; // { bookmarkId, url }
+// API for this because it only exposes the link's href, and we want a
+// dedicated "Remove" action scoped to this panel.
+let contextMenuTarget = null; // { url }
 
 function openPanelContextMenu(x, y, target) {
   contextMenuTarget = target;
@@ -442,11 +358,6 @@ function openPanelContextMenu(x, y, target) {
   const top = Math.min(y, innerHeight - rect.height - 8);
   menu.style.left = `${Math.max(8, left)}px`;
   menu.style.top = `${Math.max(8, top)}px`;
-
-  // "Remove" only makes sense for entries already saved on Karakeep (they
-  // have an id); a provisional entry (optimistic add) doesn't have one yet.
-  els.panelMenuDelete.disabled = !target.bookmarkId;
-  els.panelMenuDelete.style.display = target.bookmarkId ? '' : 'none';
 }
 
 function closePanelContextMenu() {
@@ -458,10 +369,7 @@ els.list.addEventListener('contextmenu', (e) => {
   const item = e.target.closest('.link-item');
   if (!item) return;
   e.preventDefault();
-  openPanelContextMenu(e.clientX, e.clientY, {
-    bookmarkId: item.dataset.bookmarkId || '',
-    url: item.dataset.url || item.href,
-  });
+  openPanelContextMenu(e.clientX, e.clientY, { url: item.dataset.url || item.href });
 });
 
 document.addEventListener('click', (e) => {
@@ -480,15 +388,15 @@ els.panelMenuOpen.addEventListener('click', () => {
 els.panelMenuDelete.addEventListener('click', async () => {
   const target = contextMenuTarget;
   closePanelContextMenu();
-  if (!target || !target.bookmarkId) return;
+  if (!target || !target.url) return;
 
-  const item = els.list.querySelector(`.link-item[data-bookmark-id="${CSS.escape(target.bookmarkId)}"]`);
+  const item = els.list.querySelector(`.link-item[data-url="${CSS.escape(target.url)}"]`);
   if (item) item.classList.add('is-pending'); // immediate feedback while the request is in flight
 
   try {
-    const response = await chrome.runtime.sendMessage({ type: 'delete-bookmark', id: target.bookmarkId });
+    const response = await chrome.runtime.sendMessage({ type: 'delete-bookmark', url: target.url });
     if (response && response.success) {
-      removeLinkFromDom(target.bookmarkId);
+      removeLinkFromDom(target.url);
     } else if (item) {
       item.classList.remove('is-pending'); // restore if the deletion failed
     }

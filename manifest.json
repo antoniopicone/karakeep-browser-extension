@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "__MSG_extDescription__",
   "default_locale": "it",
   "permissions": ["storage", "sidePanel", "alarms", "tabs", "contextMenus", "notifications", "scripting", "activeTab"],
+  "host_permissions": ["http://127.0.0.1/*"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "commands": {
     "add-current-tab": {
