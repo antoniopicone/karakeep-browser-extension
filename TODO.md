@@ -1,3 +1,4 @@
-- port can be random
-- adding a link does not trigger list reload
-- persistence on disk
+- [x] port can be random — syncd defaults to 47100, extension's options page now pre-fills that same default
+- [x] adding a link does not trigger list reload — root cause was a `chrome.runtime.connect` port used to track "is the panel open", which goes stale whenever Chrome suspends/respawns the service worker; replaced with a direct `sendMessage` + fallback
+- [x] persistence on disk — syncd supports `--data-dir`/`SYNCD_DATA_DIR`; documented in README
+- [x] remote deletions (from another synced device) now also update an open panel's list, not just additions

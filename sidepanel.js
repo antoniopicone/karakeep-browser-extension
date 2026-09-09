@@ -242,8 +242,10 @@ chrome.runtime.onMessage.addListener((msg) => {
     loadPage();
   } else if (msg && msg.type === 'syncd-optimistic-add') {
     prependOptimisticLink(msg.link);
-  } else if (msg && msg.type === 'syncd-bookmark-deleted') {
-    removeLinkFromDom(msg.url);
+  } else if (msg && msg.type === 'syncd-bookmarks-deleted') {
+    // A link was removed on another synced device: drop it locally too,
+    // without waiting for the next full reload.
+    for (const url of msg.urls || []) removeLinkFromDom(url);
   }
 });
 
@@ -252,15 +254,25 @@ chrome.runtime.onMessage.addListener((msg) => {
 // either a network call or the mini-crawler. Once that finishes, the
 // normal reload (triggered by the background script) replaces it with the
 // enriched version.
+//
+// Updates `allLinks` too, not just the DOM: it's the source of truth
+// renderFiltered() re-renders from, so leaving it out meant the optimistic
+// entry vanished the moment the user typed then cleared a search.
 function prependOptimisticLink(link) {
+  allLinks = allLinks.filter((l) => l.url !== link.url);
+  allLinks.unshift(link);
+
   if (currentQuery) return; // don't disturb an ongoing search
   hide(els.empty);
+  const existing = els.list.querySelector(`.link-item[data-url="${CSS.escape(link.url)}"]`);
+  if (existing) existing.remove();
   const el = createLinkEl(link);
   el.classList.add('is-pending');
   els.list.insertBefore(el, els.list.firstChild);
 }
 
 function removeLinkFromDom(url) {
+  allLinks = allLinks.filter((l) => l.url !== url);
   const el = els.list.querySelector(`.link-item[data-url="${CSS.escape(url)}"]`);
   if (el) el.remove();
   if (!els.list.children.length) show(els.empty);
@@ -312,10 +324,6 @@ els.addCurrentTab.addEventListener('click', addCurrentTab);
 
 async function init() {
   applyI18n();
-
-  // Signal to the background that the panel is open (used to decide
-  // whether to reload silently or show the badge when new links arrive).
-  chrome.runtime.connect({ name: 'sidepanel' });
 
   const data = await new Promise((resolve) =>
     chrome.storage.local.get(['port', 'authToken'], resolve)

@@ -1,16 +1,50 @@
-# Reading List (Karakeep) – Chromium extension
+# Reading List – Chromium extension
 
-Shows the links saved on your Karakeep instance in Chrome's side panel, with full-text search, infinite scroll, and image previews — a bit like Safari/macOS's Reading List.
+Shows your saved links in Chrome's side panel, with full-text search, infinite scroll, and image previews — a bit like Safari/macOS's Reading List.
 
-## Installation (developer mode)
+There's no central server: the extension only ever talks to **`syncd`** (from [serverless-sync](https://github.com/antoniopicone/serverless-sync)), a small process running on `127.0.0.1` on the same machine. `syncd` in turn keeps itself in sync with the same process running on your other devices, peer-to-peer over your [Tailscale](https://tailscale.com) tailnet — there is nothing to host, no account, and no third-party server involved.
+
+## 1. Install and run `syncd`
+
+`syncd` needs to be running locally before the extension has anything to show. It's a single self-contained binary.
+
+### Build it
+
+Requires [Rust](https://rustup.rs/) (`cargo`).
+
+```bash
+git clone https://github.com/antoniopicone/serverless-sync.git
+cd serverless-sync
+cargo build --release
+# binary at ./target/release/syncd
+```
+
+### Run it
+
+```bash
+./target/release/syncd \
+  --device my-laptop \
+  --data-dir ~/.syncd \
+  --auth-token "$(openssl rand -hex 24)"
+```
+
+- `--device <name>` — a unique name for this device (used for conflict resolution between devices).
+- `--port <n>` — **preconfigured to `47100`**, matching the extension's default; only pass this if you need to change it (e.g. running more than one instance on the same machine). This is the only value you then also need to change in the extension's settings.
+- `--data-dir <path>` (or env `SYNCD_DATA_DIR`) — **persists state to disk** (`<path>/<device>.json`, atomically written) so your links survive a restart. Without it, `syncd` keeps everything in memory only.
+- `--auth-token <secret>` (or env `SYNCD_AUTH_TOKEN`) — protects the local read/write endpoints the extension calls with a bearer token, so another local process/user on the same machine can't read or edit your list. Paste the same value into the extension's "Auth token" field. Optional, but recommended.
+- `--bootstrap host:port,...` — comma-separated addresses of other devices to sync with, if they're not auto-discovered via Tailscale.
+
+Keep it running in the background — e.g. as a `launchd`/`systemd` service, or in a terminal tab — for the extension to always have something to talk to. To sync across devices, run the same command (with a different `--device` name) on each one, all joined to the same Tailscale tailnet; see the [serverless-sync README](https://github.com/antoniopicone/serverless-sync) for the multi-device/Tailscale setup.
+
+## 2. Install the extension (developer mode)
 
 1. Open `chrome://extensions`
 2. Enable **Developer mode** (top right)
 3. **Load unpacked** → select this folder
 4. Click the extension's icon in the toolbar: the side panel opens
-5. The first time, it will ask you to configure the instance → click "Open settings"
-6. Enter your Karakeep instance URL (e.g. `https://karakeep.anto.sh`) and the API key (Karakeep → Settings → API Keys)
-7. Save: you'll be asked for permission to access that domain (required only for that domain, not for the whole web)
+5. The first time, it will ask you to configure the connection → click "Open settings"
+6. The **port** field is pre-filled with `47100` (syncd's default) — only change it if you started `syncd` with a different `--port`. If you set `--auth-token` when running `syncd`, paste the same value into **Auth token**.
+7. Save — the panel starts talking to `syncd` on `127.0.0.1` right away, no extra permission prompt needed (that domain is already granted in the manifest)
 
 The interface automatically follows the browser's language: Italian if Chrome is set to Italian, English otherwise (English fallback for other languages too, since these are the only two localizations included).
 
@@ -26,14 +60,14 @@ Once enabled there, "Reading List" will also open on the left alongside Reading 
 
 Chrome doesn't let an extension physically replace the "Reading list" panel, but the side panel has a dropdown menu at the top to choose which panel to show. "Reading List" will appear there as a selectable option, and Chrome remembers the last panel opened between sessions.
 
-## Automatic refresh (polling)
+## Automatic refresh (polling) and cross-device updates
 
-The extension checks every minute (via `chrome.alarms`, which wakes up the service worker even if Chrome has suspended it) whether new links have appeared on Karakeep, by comparing the last seen `createdAt` with the most recent one returned by `GET /api/v1/bookmarks`.
+`syncd` has no way to push events into the browser, so the extension polls it every minute (via `chrome.alarms`, which wakes the service worker even if Chrome has suspended it), fetching `GET /v1/state` and diffing it against what it saw on the previous poll:
 
-- If the side panel **is open**: the list reloads automatically and silently, with no confirmation required.
-- If the side panel **is not open**: a numeric badge appears on the toolbar icon, which clears automatically when the panel is reopened.
+- **New links** (added here, or synced in from another device over the tailnet): if the side panel **is open**, the list reloads automatically and silently, no confirmation required; if it's **not open**, a numeric badge appears on the toolbar icon and clears automatically when the panel is reopened.
+- **Removed links** (deleted here, or on another device): an open panel drops them from the list immediately, without waiting for a manual reload.
 
-**About webhooks**: Karakeep supports outgoing webhooks (`bookmark.created/updated`, see [configuration docs](https://docs.karakeep.app/configuration/environment-variables/)), but these are calls made by the Karakeep server to a URL you configure — to "push" them all the way to the browser you'd need a small relay (e.g. an endpoint on your homelab that receives the webhook and forwards it via WebSocket to the extension's service worker). The 60s polling covers the same need with much less infrastructure complexity; if you want the push-based version with a relay on your homelab in the future, it's a natural extension of this base.
+The panel-open case doesn't rely on knowing whether the panel is "connected" in any stateful way — the background script simply tries to message it and falls back to the badge only if nothing is listening. This is deliberate: Chrome can suspend and respawn the extension's service worker at any time (it isn't tied to whether the panel is visible), so any state that tries to track "is the panel currently open" independently of an actual live message would eventually drift and go stale.
 
 ## Extension icon and quick add
 
@@ -47,7 +81,7 @@ To quickly add the current page, there are three real alternatives:
 2. **Right-click on the page or on a link** → "Add to Reading List".
 3. **"+" button in the side panel**: handy when the panel is already open, with visual ✓/✕ feedback and an immediate list update.
 
-All of them show a confirmation (or error) system notification and use `POST /api/v1/bookmarks`.
+All of them show a confirmation (or error) system notification and write the entry to `syncd` via `POST /v1/write`.
 
 ## Light/dark theme and the "+" button
 
@@ -57,40 +91,30 @@ The "+" button follows the same principle: no fixed color, just a border that us
 
 ## Client-side metadata extraction
 
-When possible, the extension reads title, description, image, and favicon **directly from the tab's DOM** (via `chrome.scripting.executeScript`) at the moment you add a link, instead of waiting for Karakeep's crawler. The entry then appears in the list already with real data, without having to wait for or force a reload.
+When possible, the extension reads title, description, image, and favicon **directly from the tab's DOM** (via `chrome.scripting.executeScript`) at the moment you add a link, instead of waiting for the fallback crawler below. The entry then appears in the list already with real data, without having to wait for or force a reload.
 
 This requires the `activeTab` permission for that specific tab, which Chrome only reliably grants for certain gestures:
 
 - ✅ **Context menu on the page** (right-click → "Add to Reading List")
 - ✅ **Keyboard shortcut** (`Ctrl+Shift+K`)
-- ⚠️ **"+" button in the side panel**: there's a known Chrome limitation where `activeTab` isn't always granted when the gesture happens inside a side panel instead of on the extension's icon/menu/shortcut. In this case the extraction fails silently and falls back to the previous behavior (server-side crawl + polling every 2s) — no visible error, just a slightly longer delay before the metadata shows up.
+- ⚠️ **"+" button in the side panel**: there's a known Chrome limitation where `activeTab` isn't always granted when the gesture happens inside a side panel instead of on the extension's icon/menu/shortcut. In this case the extraction fails silently and falls back to a mini-crawler (the extension fetches the page's own HTML client-side and reads its `<title>`/OG tags) — no visible error, just a slightly longer delay before richer metadata shows up.
 
-For links found via the context menu (right-click on a link, not on the page), client-side extraction isn't possible — we don't have the DOM of the destination page — so it always goes through Karakeep's crawler.
+For links found via the context menu (right-click on a link, not on the page), client-side extraction isn't possible — we don't have the DOM of the destination page — so it always goes through the mini-crawler. The mini-crawler needs the optional "Fetch missing metadata automatically" permission (toggle in Settings), since it fetches arbitrary pages.
 
 ## Removing a link
 
-Right-click on an item in the list (inside the side panel) → "Remove from Reading List". This doesn't use Chrome's native context menu (which would only expose the link's URL, not the bookmark's id on Karakeep): it's a small panel-specific menu, which also has an "Open in new tab" entry. Removal calls `DELETE /api/v1/bookmarks/{id}` and removes the entry from the list as soon as it's confirmed.
-
-## What's new in this version
-
-- **Fix: missing metadata after quick add** — Karakeep creates the bookmark immediately but downloads title/image/description asynchronously. Now, after an add (via "+", context menu, or shortcut), the extension polls the single bookmark every 2 seconds (up to ~16s) until crawling is finished, then reloads the list again automatically — no need to force a manual reload.
-
-- **Infinite scroll**: the next page loads automatically as you scroll, no more "Load more" button
-- **Image preview**: uses `content.imageUrl` if Karakeep saved it as a direct external URL; otherwise downloads `content.imageAssetId`/`screenshotAssetId` via `GET /api/v1/assets/{id}` with authentication and shows it as a blob URL (falling back to a generic icon if the asset isn't available)
-- **Rebrand**: name "Reading List" (IT: "Elenco lettura"), new bookmark icon
-- **Multilingual**: UI strings localized in Italian and English via `chrome.i18n` (`_locales/it`, `_locales/en`)
+Right-click on an item in the list (inside the side panel) → "Remove from Reading List". This doesn't use Chrome's native context menu (which would only expose the link's URL): it's a small panel-specific menu, which also has an "Open in new tab" entry. Removal writes a tombstone to `syncd` via `POST /v1/write` and removes the entry from the list as soon as it's confirmed — and, per the section above, it's also propagated to the list when a *different* device performs the removal.
 
 ## Technical notes
 
-- APIs used: `GET /api/v1/bookmarks` (list), `GET /api/v1/bookmarks/search?q=...` (full-text search), `GET /api/v1/assets/{id}` (image preview when there's no direct `imageUrl`)
-- The list excludes archived bookmarks (`archived=false`) and only shows those of type `link`
-- API key and URL are saved in `chrome.storage.local` (never synced to Google's servers)
-- Host permission requested at runtime only for your instance's domain
-- The asset download endpoint isn't unambiguously documented publicly in the REST API v1: if previews don't load, open the side panel's developer tools (right-click on the panel → Inspect) and check the Network tab to verify the exact path on your version of Karakeep
+- APIs used, all against `syncd` on `127.0.0.1` (never a remote server): `GET /v1/state` (full list + fingerprint), `POST /v1/write` (add/update/delete one entry, `value: null` for a delete)
+- syncd's own peer-to-peer sync (over Tailscale) is what actually reconciles state between your devices; this extension only ever reads/writes the local replica
+- Port and auth token are saved in `chrome.storage.local` (never synced to Google's servers)
+- `http://127.0.0.1/*` is a fixed host permission in the manifest (covers syncd on any port), granted once at install time — no per-domain prompt like the previous, Karakeep-backed version of this extension needed
+- Search and filtering happen entirely client-side over the full `/v1/state` response: syncd has no server-side search, but a personal reading list is small enough that this is instant
 
 ## Possible future extensions
 
-- Filter by Karakeep tag/list
-- Badge with new links count
+- A way to add/edit tags from the panel and filter the list by them (the data model already carries a `tags` array, just nothing writes to it yet)
 - Sync with `chrome://bookmarks` via the `bookmarks` permission
 - More languages (just add a folder in `_locales/`)

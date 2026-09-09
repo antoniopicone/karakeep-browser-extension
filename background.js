@@ -35,16 +35,6 @@ chrome.runtime.onInstalled.addListener(() => {
 });
 chrome.runtime.onStartup.addListener(ensureAlarm);
 
-// The side panel opens a persistent connection on load and closes it when
-// hidden: this way we know for certain whether it's open, instead of
-// inferring it from the (unreliable) outcome of chrome.runtime.sendMessage.
-const openPanels = new Set();
-chrome.runtime.onConnect.addListener((port) => {
-  if (port.name !== 'sidepanel') return;
-  openPanels.add(port);
-  port.onDisconnect.addListener(() => openPanels.delete(port));
-});
-
 // If the config is saved/changed from the options page, (re)start polling
 // and run an immediate first check.
 chrome.storage.onChanged.addListener((changes, area) => {
@@ -60,13 +50,36 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 
 // If the panel is open, make it reload immediately and silently; otherwise
 // show a numeric badge on the icon as the only indicator.
+//
+// Whether the panel is open used to be tracked with a long-lived
+// chrome.runtime.connect port, but Chrome can suspend and respawn this
+// service worker at any time (MV3 lifecycle), which silently drops that
+// port even while the panel is still visibly open on screen — the panel
+// never reconnects on its own, so the tracking goes stale and the list
+// stops reloading. Instead, just try to reach the panel directly:
+// sendMessage rejects with "Receiving end does not exist" only when
+// nothing is listening, which is a reliable, self-correcting signal.
 function notifyPanelsOrBadge(count) {
-  if (openPanels.size > 0) {
-    chrome.runtime.sendMessage({ type: 'syncd-new-links', count }).catch(() => {});
-  } else {
+  chrome.runtime.sendMessage({ type: 'syncd-new-links', count }).catch(() => {
     chrome.action.setBadgeText({ text: String(Math.min(count, 99)) });
     chrome.action.setBadgeBackgroundColor({ color: '#2563eb' });
-  }
+  });
+}
+
+// Same idea for the optimistic add: give an open panel the freshly-added
+// entry right away, and fall back to the badge only if nothing was
+// actually listening.
+function notifyOptimisticAdd(link) {
+  chrome.runtime.sendMessage({ type: 'syncd-optimistic-add', link }).catch(() => {
+    notifyPanelsOrBadge(1);
+  });
+}
+
+// Removing an entry never needs a badge (there's nothing to draw attention
+// to), but an open panel should drop it from the list right away instead of
+// waiting for the next full reload.
+function notifyRemoteDeletions(urls) {
+  chrome.runtime.sendMessage({ type: 'syncd-bookmarks-deleted', urls }).catch(() => {});
 }
 
 // ------------------------------------------------------- local syncd client
@@ -113,6 +126,13 @@ function normalizeBookmarkUrl(raw) {
   }
 }
 
+// Runs every minute (chrome.alarms) and is the only place that notices
+// changes made by ANOTHER synced device: syncd's peer-to-peer anti-entropy
+// merges those into local state on its own, this just has to detect that it
+// happened. Diffs the URL set against the previous poll instead of only
+// tracking "newest updatedAt", because a remote deletion doesn't bump any
+// timestamp and can even drop entries.length to 0 — a pure timestamp check
+// would silently miss it.
 async function checkForNewLinks() {
   const { port } = await syncdConfig();
   if (!port) return;
@@ -122,33 +142,38 @@ async function checkForNewLinks() {
     if (!res.ok) return;
     const data = await res.json();
     const entries = data.entries || [];
-    if (entries.length === 0) return;
 
+    const currentUrls = new Set();
     let newestUpdatedAt = 0;
     for (const e of entries) {
       const v = parseEntryValue(e.value);
-      if (v && v.updatedAt > newestUpdatedAt) newestUpdatedAt = v.updatedAt;
+      if (!v || !v.url) continue;
+      currentUrls.add(v.url);
+      if (v.updatedAt > newestUpdatedAt) newestUpdatedAt = v.updatedAt;
     }
-    if (newestUpdatedAt === 0) return;
 
-    const { lastSeenUpdatedAt } = await chrome.storage.local.get(['lastSeenUpdatedAt']);
+    const { lastSeenUpdatedAt, knownUrls } = await chrome.storage.local.get(['lastSeenUpdatedAt', 'knownUrls']);
 
-    if (!lastSeenUpdatedAt) {
+    if (!lastSeenUpdatedAt && !knownUrls) {
       // First run: just store the reference, without notifying about links
       // that already existed before the extension was installed.
-      await chrome.storage.local.set({ lastSeenUpdatedAt: newestUpdatedAt });
+      await chrome.storage.local.set({ lastSeenUpdatedAt: newestUpdatedAt, knownUrls: [...currentUrls] });
       return;
     }
 
-    if (newestUpdatedAt <= lastSeenUpdatedAt) return; // nothing new
-
+    const removedUrls = (knownUrls || []).filter((u) => !currentUrls.has(u));
     const newCount = entries.filter((e) => {
       const v = parseEntryValue(e.value);
-      return v && v.updatedAt > lastSeenUpdatedAt;
+      return v && v.updatedAt > (lastSeenUpdatedAt || 0);
     }).length;
-    if (newCount === 0) return;
 
-    notifyPanelsOrBadge(newCount);
+    await chrome.storage.local.set({ knownUrls: [...currentUrls] });
+    if (newestUpdatedAt > (lastSeenUpdatedAt || 0)) {
+      await chrome.storage.local.set({ lastSeenUpdatedAt: newestUpdatedAt });
+    }
+
+    if (removedUrls.length > 0) notifyRemoteDeletions(removedUrls);
+    if (newCount > 0) notifyPanelsOrBadge(newCount);
   } catch (err) {
     console.error('syncd polling failed:', err);
   }
@@ -312,13 +337,10 @@ async function addBookmarkFromUrl(rawUrl, title, tabId) {
 
     notify(chrome.i18n.getMessage('notifyAddedTitle'), value.title);
 
-    if (openPanels.size > 0) {
-      // The panel can draw the entry right away with real data, without
-      // waiting for either the network or the mini-crawler.
-      chrome.runtime.sendMessage({ type: 'syncd-optimistic-add', link: value }).catch(() => {});
-    } else {
-      notifyPanelsOrBadge(1);
-    }
+    // An open panel can draw the entry right away with real data, without
+    // waiting for either the network or the mini-crawler; otherwise this
+    // falls back to the badge (see notifyOptimisticAdd).
+    notifyOptimisticAdd(value);
 
     // Thin metadata (no description AND no image): client-side extraction
     // either wasn't available for this gesture or the page itself has none

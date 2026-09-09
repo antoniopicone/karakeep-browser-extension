@@ -3,6 +3,10 @@ const authTokenInput = document.getElementById('authToken');
 const statusEl = document.getElementById('status');
 const crawlToggle = document.getElementById('crawlToggle');
 const CRAWL_ORIGINS = ['https://*/*', 'http://*/*'];
+// Matches syncd's own default (AGENT_PORT in discovery.rs): most installs
+// never need to touch this, but it stays a plain editable field for the
+// (rarer) case of running multiple syncd instances or a non-default port.
+const DEFAULT_PORT = 47100;
 
 function applyI18n() {
   document.title = chrome.i18n.getMessage('optionsTitle');
@@ -25,7 +29,7 @@ applyI18n();
 
 // Pre-fill the fields with the saved values
 chrome.storage.local.get(['port', 'authToken'], (data) => {
-  if (data.port) portInput.value = data.port;
+  portInput.value = data.port || DEFAULT_PORT;
   if (data.authToken) authTokenInput.value = data.authToken;
 });
 
