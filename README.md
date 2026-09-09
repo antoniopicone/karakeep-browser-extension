@@ -34,7 +34,7 @@ cargo build --release
 - `--auth-token <secret>` (or env `SYNCD_AUTH_TOKEN`) — protects the local read/write endpoints the extension calls with a bearer token, so another local process/user on the same machine can't read or edit your list. Paste the same value into the extension's "Auth token" field. Optional, but recommended.
 - `--bootstrap host:port,...` — comma-separated addresses of other devices to sync with, if they're not auto-discovered via Tailscale.
 
-Keep it running in the background — e.g. as a `launchd`/`systemd` service, or in a terminal tab — for the extension to always have something to talk to. To sync across devices, run the same command (with a different `--device` name) on each one, all joined to the same Tailscale tailnet; see the [serverless-sync README](https://github.com/antoniopicone/serverless-sync) for the multi-device/Tailscale setup.
+Keep it running in the background for the extension to always have something to talk to. [`service/`](service/) has ready-to-use setups so it starts automatically instead of needing a terminal tab open: a `make install-service` target (systemd `--user`) on Linux, a `launchd` plist on macOS, and a Scheduled Task installer on Windows. To sync across devices, run the same command (with a different `--device` name) on each one, all joined to the same Tailscale tailnet; see the [serverless-sync README](https://github.com/antoniopicone/serverless-sync) for the multi-device/Tailscale setup.
 
 ## 2. Install the extension (developer mode)
 

@@ -1,0 +1,13 @@
+[Unit]
+Description=syncd (serverless-sync) — local peer-to-peer bookmark sync
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__EXEC_START__
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
