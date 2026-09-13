@@ -1,22 +1,13 @@
-const portInput = document.getElementById('port');
-const authTokenInput = document.getElementById('authToken');
 const statusEl = document.getElementById('status');
+const testConnectionBtn = document.getElementById('testConnection');
 const crawlToggle = document.getElementById('crawlToggle');
 const CRAWL_ORIGINS = ['https://*/*', 'http://*/*'];
-// Matches syncd's own default (AGENT_PORT in discovery.rs): most installs
-// never need to touch this, but it stays a plain editable field for the
-// (rarer) case of running multiple syncd instances or a non-default port.
-const DEFAULT_PORT = 47100;
 
 function applyI18n() {
   document.title = chrome.i18n.getMessage('optionsTitle');
   document.querySelectorAll('[data-i18n]').forEach((el) => {
     const msg = chrome.i18n.getMessage(el.getAttribute('data-i18n'));
     if (msg) el.textContent = msg;
-  });
-  document.querySelectorAll('[data-i18n-placeholder]').forEach((el) => {
-    const msg = chrome.i18n.getMessage(el.getAttribute('data-i18n-placeholder'));
-    if (msg) el.setAttribute('placeholder', msg);
   });
 }
 
@@ -27,31 +18,21 @@ function setStatus(msg, ok) {
 
 applyI18n();
 
-// Pre-fill the fields with the saved values
-chrome.storage.local.get(['port', 'authToken'], (data) => {
-  portInput.value = data.port || DEFAULT_PORT;
-  if (data.authToken) authTokenInput.value = data.authToken;
-});
-
-document.getElementById('save').addEventListener('click', () => {
-  const port = parseInt(portInput.value, 10);
-  const authToken = authTokenInput.value.trim();
-
-  if (!port) {
-    setStatus(chrome.i18n.getMessage('statusMissingFields'), false);
-    return;
+// There's no port or secret to configure anymore: the extension talks to
+// its embedded reading-list-syncd daemon over Chrome Native Messaging (see
+// native-client.js), which Chrome itself scopes to this extension's fixed
+// ID — nothing left here to type in. This button just calls the daemon and
+// reports whether it answered, for troubleshooting the native-messaging
+// host / background service install (see the main README).
+testConnectionBtn.addEventListener('click', async () => {
+  setStatus(chrome.i18n.getMessage('statusConnecting'), true);
+  try {
+    const data = await syncdState();
+    setStatus(chrome.i18n.getMessage('statusConnectionOk').replace('{count}', (data.entries || []).length), true);
+  } catch (err) {
+    console.error('syncd connection test failed:', err);
+    setStatus(`${chrome.i18n.getMessage('statusConnectionFailed')} (${err.message})`, false);
   }
-  if (port < 1 || port > 65535) {
-    setStatus(chrome.i18n.getMessage('statusInvalidPort'), false);
-    return;
-  }
-
-  // No permission request needed here: http://127.0.0.1/* is a fixed
-  // manifest host permission (Chrome match patterns have no port field, so
-  // it already covers syncd on any port), granted once at install time.
-  chrome.storage.local.set({ port, authToken }, () => {
-    setStatus(chrome.i18n.getMessage('statusSaved'), true);
-  });
 });
 
 // The mini-crawler's broad host permission (any http/https origin, needed

@@ -2,51 +2,43 @@
 
 Shows your saved links in Chrome's side panel, with full-text search, infinite scroll, and image previews — a bit like Safari/macOS's Reading List.
 
-There's no central server: the extension only ever talks to **`syncd`** (from [serverless-sync](https://github.com/antoniopicone/serverless-sync)), a small process running on `127.0.0.1` on the same machine. `syncd` in turn keeps itself in sync with the same process running on your other devices, peer-to-peer over your [Tailscale](https://tailscale.com) tailnet — there is nothing to host, no account, and no third-party server involved.
+There's no central server, and no generic multi-app daemon either: this project embeds its own dedicated sync daemon, **`reading-list-syncd`** (source under [`native/`](native/), a scoped-down fork of [serverless-sync](https://github.com/antoniopicone/serverless-sync)'s design), built for exactly this one extension. It keeps your reading list in a plain **CSV ledger** on disk — `~/.reading-list/reading-list.csv` by default, one row per change, readable (and, carefully, editable) with any text editor or spreadsheet, not just an internal cache — and syncs that ledger peer-to-peer with the same daemon running on your other devices, over your [Tailscale](https://tailscale.com) tailnet or plain LAN broadcast. Nothing to host, no account, no third-party server.
 
-## 1. Install and run `syncd`
+The extension itself never opens a network connection to talk to it: it goes through Chrome's **Native Messaging** instead (`chrome.runtime.sendNativeMessage`), which Chrome gates to this exact extension's ID on its own — there's no port or secret to type into a settings page anymore.
 
-`syncd` needs to be running locally before the extension has anything to show. It's a single self-contained binary.
-
-### Build it
+## 1. Build and install `reading-list-syncd`
 
 Requires [Rust](https://rustup.rs/) (`cargo`).
 
 ```bash
-git clone https://github.com/antoniopicone/serverless-sync.git
-cd serverless-sync
-cargo build --release
-# binary at ./target/release/syncd
+git clone https://github.com/antoniopicone/karakeep-browser-extension.git
+cd karakeep-browser-extension
+make install
 ```
 
-### Run it
+`make install` builds the daemon (`cargo build --release` in `native/reading-list-syncd/`, no submodule to fetch — it's plain source checked into this repo) and installs two things:
 
-```bash
-./target/release/syncd \
-  --device my-laptop \
-  --data-dir ~/.syncd \
-  --auth-token "$(openssl rand -hex 24)"
-```
+1. **The background daemon**, as a systemd `--user` service on Linux (see [`service/`](service/) for the macOS `launchd` / Windows Scheduled Task equivalents) — it starts on login, restarts on failure, owns the CSV ledger, and does the actual peer-to-peer sync.
+2. **A Native Messaging host manifest**, telling Chrome it's allowed to spawn `reading-list-syncd` (bridge mode) on this extension's behalf. Pinned to this extension's fixed ID (`abnldgaciobpabmoffpkalojiihoollj`, baked into `manifest.json`'s `"key"` so it's the same on every machine you load it on).
 
-- `--device <name>` — a unique name for this device (used for conflict resolution between devices).
-- `--port <n>` — **preconfigured to `47100`**, matching the extension's default; only pass this if you need to change it (e.g. running more than one instance on the same machine). This is the only value you then also need to change in the extension's settings.
-- `--data-dir <path>` (or env `SYNCD_DATA_DIR`) — **persists state to disk** (`<path>/<device>.json`, atomically written) so your links survive a restart. Without it, `syncd` keeps everything in memory only.
-- `--auth-token <secret>` (or env `SYNCD_AUTH_TOKEN`) — protects the local read/write endpoints the extension calls with a bearer token, so another local process/user on the same machine can't read or edit your list. Paste the same value into the extension's "Auth token" field. Optional, but recommended.
-- `--bootstrap host:port,...` — comma-separated addresses of other devices to sync with, if they're not auto-discovered via Tailscale.
-
-Keep it running in the background for the extension to always have something to talk to. [`service/`](service/) has ready-to-use setups so it starts automatically instead of needing a terminal tab open: a `make install-service` target (systemd `--user`) on Linux, a `launchd` plist on macOS, and a Scheduled Task installer on Windows. To sync across devices, run the same command (with a different `--device` name) on each one, all joined to the same Tailscale tailnet; see the [serverless-sync README](https://github.com/antoniopicone/serverless-sync) for the multi-device/Tailscale setup.
+Split into `make install-service` / `make install-native-host` if you only need one. Useful overrides: `SYNCD_DEVICE` (defaults to your hostname), `SYNCD_PORT` (defaults to `47100`, only the peer-to-peer side needs this — nothing in the extension does anymore), `SYNCD_DATA_DIR` (defaults to `~/.reading-list`), `SYNCD_BOOTSTRAP` (comma-separated `host:port,...` for devices not auto-discovered via Tailscale). `make status-service` / `make logs-service` / `make uninstall` round it out.
 
 ## 2. Install the extension (developer mode)
 
 1. Open `chrome://extensions`
 2. Enable **Developer mode** (top right)
 3. **Load unpacked** → select this folder
-4. Click the extension's icon in the toolbar: the side panel opens
-5. The first time, it will ask you to configure the connection → click "Open settings"
-6. The **port** field is pre-filled with `47100` (syncd's default) — only change it if you started `syncd` with a different `--port`. If you set `--auth-token` when running `syncd`, paste the same value into **Auth token**.
-7. Save — the panel starts talking to `syncd` on `127.0.0.1` right away, no extra permission prompt needed (that domain is already granted in the manifest)
+4. Click the extension's icon in the toolbar: the side panel opens and starts talking to `reading-list-syncd` right away — no settings to fill in
+
+If it can't reach the daemon (native host not installed, or the service isn't running), the panel shows a setup message instead of an error; the options page also has a **"Test connection"** button for troubleshooting — see [`service/README.md`](service/README.md).
 
 The interface automatically follows the browser's language: Italian if Chrome is set to Italian, English otherwise (English fallback for other languages too, since these are the only two localizations included).
+
+## Syncing across devices
+
+Repeat step 1 on every device you want kept in sync (with a different `SYNCD_DEVICE` each time — it's just a conflict-resolution label), all reachable over the same Tailscale tailnet or LAN. There's no pairing step: any two `reading-list-syncd` instances that can reach each other over the network sync automatically, the same way two `syncd` instances would — see serverless-sync's README for the discovery mechanics (tailnet, LAN broadcast, peer exchange) reused here as-is (`native/reading-list-syncd/src/discovery.rs`, copied verbatim).
+
+**Security note:** unlike serverless-sync's own per-application secret, peer-to-peer traffic between `reading-list-syncd` instances is currently **unencrypted at this layer** — it relies on Tailscale's own WireGuard tunnel for the primary transport; the LAN-broadcast fallback is meant for a trusted home network only. Loopback-only binding plus Chrome's Native Messaging origin check replace the old secret for the *local* side (extension ↔ daemon), which is the part that changed with this rewrite. If you need encrypted peer traffic on an untrusted LAN, that's a gap worth closing before relying on it there — see `native/reading-list-syncd/src/main.rs`'s module doc comment.
 
 ## Side panel on the left
 
@@ -62,7 +54,7 @@ Chrome doesn't let an extension physically replace the "Reading list" panel, but
 
 ## Automatic refresh (polling) and cross-device updates
 
-`syncd` has no way to push events into the browser, so the extension polls it every minute (via `chrome.alarms`, which wakes the service worker even if Chrome has suspended it), fetching `GET /v1/state` and diffing it against what it saw on the previous poll:
+`reading-list-syncd` has no way to push events into the browser, so the extension polls it every minute (via `chrome.alarms`, which wakes the service worker even if Chrome has suspended it), fetching its full `state` and diffing it against what it saw on the previous poll:
 
 - **New links** (added here, or synced in from another device over the tailnet): if the side panel **is open**, the list reloads automatically and silently, no confirmation required; if it's **not open**, a numeric badge appears on the toolbar icon and clears automatically when the panel is reopened.
 - **Removed links** (deleted here, or on another device): an open panel drops them from the list immediately, without waiting for a manual reload.
@@ -81,7 +73,7 @@ To quickly add the current page, there are three real alternatives:
 2. **Right-click on the page or on a link** → "Add to Reading List".
 3. **"+" button in the side panel**: handy when the panel is already open, with visual ✓/✕ feedback and an immediate list update.
 
-All of them show a confirmation (or error) system notification and write the entry to `syncd` via `POST /v1/write`.
+All of them show a confirmation (or error) system notification and write the entry via a native-messaging `write` call (see `native-client.js`).
 
 ## Light/dark theme and the "+" button
 
@@ -103,18 +95,24 @@ For links found via the context menu (right-click on a link, not on the page), c
 
 ## Removing a link
 
-Right-click on an item in the list (inside the side panel) → "Remove from Reading List". This doesn't use Chrome's native context menu (which would only expose the link's URL): it's a small panel-specific menu, which also has an "Open in new tab" entry. Removal writes a tombstone to `syncd` via `POST /v1/write` and removes the entry from the list as soon as it's confirmed — and, per the section above, it's also propagated to the list when a *different* device performs the removal.
+Right-click on an item in the list (inside the side panel) → "Remove from Reading List". This doesn't use Chrome's native context menu (which would only expose the link's URL): it's a small panel-specific menu, which also has an "Open in new tab" entry. Removal writes a tombstone via the same native-messaging `write` call (`value: null`) and removes the entry from the list as soon as it's confirmed — and, per the section above, it's also propagated to the list when a *different* device performs the removal.
+
+## The CSV ledger
+
+`~/.reading-list/reading-list.csv` (or wherever `--data` points) is not an internal cache — it's the actual source of truth, an append-only log with one row per change: `device,seq,entity,kind,value,hlc`. `entity` is the bookmark's URL, `value` its JSON blob (title/description/image/favicon/tags/note/timestamps), `kind` is `upsert` or `delete`, `hlc` a hybrid logical clock used to deterministically resolve conflicts between devices. Reading it externally (a script, a spreadsheet, `grep`) is fine; editing it while the daemon is stopped is fine too (it's replayed from scratch on the next start) — editing it *while the daemon is running* will be silently overwritten by the in-memory state on the next write, since the daemon never re-reads the file after startup. There's no compaction: the log only grows (see `native/reading-list-syncd/README` — inherited from serverless-sync's own reasoning about why a CRDT op log can't just drop old rows).
 
 ## Technical notes
 
-- APIs used, all against `syncd` on `127.0.0.1` (never a remote server): `GET /v1/state` (full list + fingerprint), `POST /v1/write` (add/update/delete one entry, `value: null` for a delete)
-- syncd's own peer-to-peer sync (over Tailscale) is what actually reconciles state between your devices; this extension only ever reads/writes the local replica
-- Port and auth token are saved in `chrome.storage.local` (never synced to Google's servers)
-- `http://127.0.0.1/*` is a fixed host permission in the manifest (covers syncd on any port), granted once at install time — no per-domain prompt like the previous, Karakeep-backed version of this extension needed
-- Search and filtering happen entirely client-side over the full `/v1/state` response: syncd has no server-side search, but a personal reading list is small enough that this is instant
+- The extension never opens a network connection of its own to sync: everything goes through Chrome's Native Messaging (`chrome.runtime.sendNativeMessage`, see `native-client.js`) to `reading-list-syncd`, a background daemon this project embeds (source under `native/`), not a generic multi-app service.
+- Two messages, both JSON: `{ type: "write", entity, value }` (`value: null` to delete) → `{ seq, vv }`; `{ type: "state" }` → `{ device, entries: [{entity, value}, ...], vv, fingerprint }`. The native host process itself is short-lived — Chrome spawns it fresh per call and it just relays this one message to the long-running daemon's loopback HTTP API (see `native/reading-list-syncd/src/main.rs`'s module doc comment for why it has to work that way).
+- `reading-list-syncd`'s own peer-to-peer sync (over Tailscale or LAN broadcast) is what actually reconciles the CSV ledger between your devices; the extension only ever reads/writes the local replica through the bridge above.
+- Nothing is stored in `chrome.storage.local` for the sync connection anymore (no port, no secret) — Chrome's Native Messaging `allowed_origins` (pinned to this extension's fixed ID, see `manifest.json`'s `"key"`) plus the daemon's loopback-only local API are what gate access instead.
+- No `host_permissions` needed anymore either (the old `http://127.0.0.1/*` entry is gone) — Native Messaging doesn't go through the extension's fetch/XHR permission model at all.
+- Search and filtering happen entirely client-side over the full `state` response: the daemon has no server-side search, but a personal reading list is small enough that this is instant.
 
 ## Possible future extensions
 
 - A way to add/edit tags from the panel and filter the list by them (the data model already carries a `tags` array, just nothing writes to it yet)
 - Sync with `chrome://bookmarks` via the `bookmarks` permission
 - More languages (just add a folder in `_locales/`)
+- Encrypting `reading-list-syncd`'s peer-to-peer traffic (currently relies on Tailscale's own transport encryption — see "Syncing across devices" above)

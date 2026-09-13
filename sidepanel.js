@@ -29,7 +29,6 @@ const ADD_ICON_SVG =
   '<line x1="9" y1="9.5" x2="15" y2="9.5"/>' +
   '</svg>';
 
-let config = { port: null, authToken: null };
 let currentQuery = '';
 let requestSeq = 0;
 let isFetching = false;
@@ -178,18 +177,6 @@ function renderFiltered() {
   renderItems(filtered);
 }
 
-async function apiFetch(path) {
-  const url = `http://127.0.0.1:${config.port}${path}`;
-  const headers = { Accept: 'application/json' };
-  if (config.authToken) headers.Authorization = `Bearer ${config.authToken}`;
-
-  const res = await fetch(url, { headers });
-  if (!res.ok) {
-    throw new Error(chrome.i18n.getMessage('fetchErrorText'));
-  }
-  return res.json();
-}
-
 // Everything comes from a single local call: no cursor, no server-side
 // search — syncd has no concept of either, and a personal bookmark list is
 // small enough that filtering the whole thing in the panel is instant.
@@ -201,8 +188,9 @@ async function loadPage() {
   setState({ loading: true });
 
   try {
-    const data = await apiFetch('/v1/state');
+    const data = await syncdState();
     if (seq !== requestSeq) return;
+    await chrome.storage.local.set({ serviceEverReachable: true });
 
     allLinks = (data.entries || [])
       .map((e) => parseValue(e.value))
@@ -220,7 +208,17 @@ async function loadPage() {
     }
   } catch (err) {
     if (seq !== requestSeq) return;
-    setState({ error: err.message || String(err) });
+    console.error('syncd state fetch failed:', err);
+    // Never having reached the daemon before (fresh install, native host
+    // not registered yet) gets the friendlier "not configured" screen with
+    // setup instructions; a failure after it worked at least once before is
+    // shown as a plain, transient error instead.
+    const { serviceEverReachable } = await chrome.storage.local.get('serviceEverReachable');
+    if (!serviceEverReachable) {
+      setState({ notConfigured: true });
+    } else {
+      setState({ error: chrome.i18n.getMessage('fetchErrorText') });
+    }
   } finally {
     isFetching = false;
   }
@@ -279,10 +277,6 @@ function removeLinkFromDom(url) {
 }
 
 async function addCurrentTab() {
-  if (!config.port) {
-    chrome.runtime.openOptionsPage();
-    return;
-  }
   setAddButtonState('loading');
   try {
     const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -324,27 +318,9 @@ els.addCurrentTab.addEventListener('click', addCurrentTab);
 
 async function init() {
   applyI18n();
-
-  const data = await new Promise((resolve) =>
-    chrome.storage.local.get(['port', 'authToken'], resolve)
-  );
-
   setAddButtonState('idle');
-
-  if (!data.port) {
-    setState({ notConfigured: true });
-    return;
-  }
-
-  config = data;
   await loadPage();
 }
-
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes.port || changes.authToken)) {
-    init();
-  }
-});
 
 // Custom context menu on the list's links: right-click → "Open in new tab" /
 // "Remove from Reading List". We don't use the native chrome.contextMenus

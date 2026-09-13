@@ -1,5 +1,5 @@
 [Unit]
-Description=syncd (serverless-sync) — local peer-to-peer bookmark sync
+Description=reading-list-syncd — embedded peer-to-peer sync daemon for the Reading List extension
 After=network-online.target tailscaled.service
 Wants=network-online.target
 

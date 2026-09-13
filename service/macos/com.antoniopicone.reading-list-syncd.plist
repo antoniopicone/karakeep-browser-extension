@@ -3,27 +3,28 @@
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>com.antoniopicone.syncd</string>
+  <string>com.antoniopicone.reading-list-syncd</string>
 
   <!-- Edit the paths/values below before installing, then:
-         cp com.antoniopicone.syncd.plist ~/Library/LaunchAgents/
-         launchctl load -w ~/Library/LaunchAgents/com.antoniopicone.syncd.plist
+         cp com.antoniopicone.reading-list-syncd.plist ~/Library/LaunchAgents/
+         launchctl load -w ~/Library/LaunchAgents/com.antoniopicone.reading-list-syncd.plist
        To uninstall:
-         launchctl unload -w ~/Library/LaunchAgents/com.antoniopicone.syncd.plist
-         rm ~/Library/LaunchAgents/com.antoniopicone.syncd.plist -->
+         launchctl unload -w ~/Library/LaunchAgents/com.antoniopicone.reading-list-syncd.plist
+         rm ~/Library/LaunchAgents/com.antoniopicone.reading-list-syncd.plist
+
+       This only starts the background daemon (serve mode). You still need
+       the Native Messaging host manifest installed too, so the extension
+       can reach it — see service/README.md. -->
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/YOUR_USERNAME/Developer/serverless-sync/target/release/syncd</string>
+    <string>/Users/YOUR_USERNAME/Developer/karakeep-browser-extension/native/reading-list-syncd/target/release/reading-list-syncd</string>
+    <string>serve</string>
     <string>--device</string>
     <string>my-mac</string>
-    <string>--data-dir</string>
-    <string>/Users/YOUR_USERNAME/.syncd</string>
+    <string>--data</string>
+    <string>/Users/YOUR_USERNAME/.reading-list/reading-list.csv</string>
     <string>--port</string>
     <string>47100</string>
-    <!-- Uncomment and set if you started syncd elsewhere with --auth-token:
-    <string>--auth-token</string>
-    <string>YOUR_TOKEN</string>
-    -->
   </array>
 
   <key>RunAtLoad</key>
@@ -35,8 +36,8 @@
   </dict>
 
   <key>StandardOutPath</key>
-  <string>/Users/YOUR_USERNAME/.syncd/syncd.log</string>
+  <string>/Users/YOUR_USERNAME/.reading-list/reading-list-syncd.log</string>
   <key>StandardErrorPath</key>
-  <string>/Users/YOUR_USERNAME/.syncd/syncd.err.log</string>
+  <string>/Users/YOUR_USERNAME/.reading-list/reading-list-syncd.err.log</string>
 </dict>
 </plist>

@@ -1,3 +1,5 @@
+importScripts('native-client.js');
+
 const ALARM_NAME = 'syncd-poll';
 const POLL_MINUTES = 1; // the minimum allowed by chrome.alarms is 1 minute
 const CONTEXT_MENU_ADD_ID = 'add-to-reading-list';
@@ -34,15 +36,6 @@ chrome.runtime.onInstalled.addListener(() => {
   ensureContextMenu();
 });
 chrome.runtime.onStartup.addListener(ensureAlarm);
-
-// If the config is saved/changed from the options page, (re)start polling
-// and run an immediate first check.
-chrome.storage.onChanged.addListener((changes, area) => {
-  if (area === 'local' && (changes.port || changes.authToken)) {
-    ensureAlarm();
-    checkForNewLinks();
-  }
-});
 
 chrome.alarms.onAlarm.addListener((alarm) => {
   if (alarm.name === ALARM_NAME) checkForNewLinks();
@@ -84,22 +77,19 @@ function notifyRemoteDeletions(urls) {
 
 // ------------------------------------------------------- local syncd client
 //
-// No central Karakeep server: every call here hits the syncd instance
-// running on this same machine (127.0.0.1), which does its own
-// peer-to-peer mesh sync with the other devices over Tailscale — see
-// serverless-sync's README. This background script only ever talks to
-// localhost.
+// No central Karakeep server, and no generic multi-app daemon either: every
+// call here goes through Chrome Native Messaging (see native-client.js,
+// imported above) to reading-list-syncd, a background daemon embedded in
+// this project (native/) and dedicated to this one extension. That daemon
+// owns a plain CSV ledger (see its own README) and does its own
+// peer-to-peer mesh sync with the same daemon on other devices, over
+// Tailscale or the LAN.
 
-async function syncdConfig() {
-  return chrome.storage.local.get(['port', 'authToken']);
-}
-
-async function syncdFetch(path, opts = {}) {
-  const { port, authToken } = await syncdConfig();
-  if (!port) throw new Error('not-configured');
-  const headers = { ...(opts.headers || {}) };
-  if (authToken) headers.Authorization = `Bearer ${authToken}`;
-  return fetch(`http://127.0.0.1:${port}${path}`, { ...opts, headers });
+// True once any native-messaging call has ever succeeded on this profile —
+// distinguishes "never set up" (show setup instructions) from "transient
+// failure" (show a plain error) in checkForNewLinks/sidepanel.js.
+async function markServiceReachable() {
+  await chrome.storage.local.set({ serviceEverReachable: true });
 }
 
 function parseEntryValue(raw) {
@@ -134,13 +124,9 @@ function normalizeBookmarkUrl(raw) {
 // timestamp and can even drop entries.length to 0 — a pure timestamp check
 // would silently miss it.
 async function checkForNewLinks() {
-  const { port } = await syncdConfig();
-  if (!port) return;
-
   try {
-    const res = await syncdFetch('/v1/state');
-    if (!res.ok) return;
-    const data = await res.json();
+    const data = await syncdState();
+    await markServiceReachable();
     const entries = data.entries || [];
 
     const currentUrls = new Set();
@@ -177,6 +163,18 @@ async function checkForNewLinks() {
   } catch (err) {
     console.error('syncd polling failed:', err);
   }
+}
+
+// Distinguishes "the native host isn't installed/registered at all" or
+// "the background daemon isn't running" from a one-off transient failure,
+// so the notification (and the side panel, see sidepanel.js) can point to
+// setup instructions instead of a generic error. Message text is the only
+// signal available here: Chrome's own native-messaging errors ("Specified
+// native messaging host not found.", "Access to the specified native
+// messaging host is forbidden.") and our own bridge's ("... isn't running
+// ...", see native/reading-list-syncd/src/main.rs) all land in err.message.
+function isServiceNotConfiguredError(err) {
+  return /native messaging host|isn't running/i.test(err && err.message || '');
 }
 
 function notify(title, message) {
@@ -300,12 +298,6 @@ async function tryExtractFromTab(tabId) {
 }
 
 async function addBookmarkFromUrl(rawUrl, title, tabId) {
-  const { port } = await syncdConfig();
-
-  if (!port) {
-    notify(chrome.i18n.getMessage('notifyNotConfiguredTitle'), chrome.i18n.getMessage('notifyNotConfiguredBody'));
-    return false;
-  }
   if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) {
     notify(chrome.i18n.getMessage('notifyInvalidTitle'), chrome.i18n.getMessage('notifyInvalidBody'));
     return false;
@@ -328,12 +320,8 @@ async function addBookmarkFromUrl(rawUrl, title, tabId) {
   };
 
   try {
-    const res = await syncdFetch('/v1/write', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entity: url, value: JSON.stringify(value) }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await syncdWrite(url, JSON.stringify(value));
+    await markServiceReachable();
 
     notify(chrome.i18n.getMessage('notifyAddedTitle'), value.title);
 
@@ -358,12 +346,8 @@ async function addBookmarkFromUrl(rawUrl, title, tabId) {
           updatedAt: Date.now(),
         };
         try {
-          const r = await syncdFetch('/v1/write', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ entity: url, value: JSON.stringify(merged) }),
-          });
-          if (r.ok) notifyPanelsOrBadge(1);
+          await syncdWrite(url, JSON.stringify(merged));
+          notifyPanelsOrBadge(1);
         } catch (err) {
           console.error('Updating crawled metadata failed:', err);
         }
@@ -373,22 +357,20 @@ async function addBookmarkFromUrl(rawUrl, title, tabId) {
     return true;
   } catch (err) {
     console.error('Adding bookmark failed:', err);
-    notify(chrome.i18n.getMessage('notifyErrorTitle'), chrome.i18n.getMessage('notifyErrorBody'));
+    if (isServiceNotConfiguredError(err)) {
+      notify(chrome.i18n.getMessage('notifyNotConfiguredTitle'), chrome.i18n.getMessage('notifyNotConfiguredBody'));
+    } else {
+      notify(chrome.i18n.getMessage('notifyErrorTitle'), chrome.i18n.getMessage('notifyErrorBody'));
+    }
     return false;
   }
 }
 
 async function deleteBookmark(url) {
-  const { port } = await syncdConfig();
-  if (!port || !url) return false;
+  if (!url) return false;
 
   try {
-    const res = await syncdFetch('/v1/write', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ entity: url, value: null }),
-    });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    await syncdWrite(url, null);
     return true;
   } catch (err) {
     console.error('Deleting bookmark failed:', err);

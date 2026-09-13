@@ -11,18 +11,9 @@
     color: #1f2430;
   }
   h1 { font-size: 18px; }
-  label { display: block; margin-top: 16px; font-size: 13px; font-weight: 600; }
-  input {
-    width: 100%;
-    padding: 8px 10px;
-    margin-top: 6px;
-    border: 1px solid #d0d5dd;
-    border-radius: 6px;
-    font-size: 14px;
-    box-sizing: border-box;
-  }
+  h2 { font-size: 14px; margin-top: 28px; }
   button {
-    margin-top: 20px;
+    margin-top: 12px;
     padding: 9px 18px;
     background: #2563eb;
     color: white;
@@ -39,20 +30,15 @@
   .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 22px; }
   .checkbox-row input { width: auto; margin: 0; }
   .checkbox-row label { display: inline; margin: 0; font-weight: 600; font-size: 13px; }
+  code { background: #f2f4f7; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 </style>
 </head>
 <body>
   <h1 data-i18n="optionsTitle"></h1>
 
-  <label for="port" data-i18n="portLabel"></label>
-  <input id="port" type="number" min="1" max="65535" placeholder="47100" />
-  <div class="hint" data-i18n="portHint"></div>
-
-  <label for="authToken" data-i18n="authTokenLabel"></label>
-  <input id="authToken" type="password" data-i18n-placeholder="authTokenPlaceholder" />
-  <div class="hint" data-i18n="authTokenHint"></div>
-
-  <button id="save" data-i18n="saveBtn"></button>
+  <h2 data-i18n="connectionSectionTitle"></h2>
+  <p class="hint" data-i18n="connectionSectionHint"></p>
+  <button id="testConnection" data-i18n="testConnectionBtn"></button>
   <div id="status"></div>
 
   <div class="checkbox-row">
@@ -61,6 +47,7 @@
   </div>
   <div class="hint" data-i18n="crawlToggleHint"></div>
 
+  <script src="native-client.js"></script>
   <script src="options.js"></script>
 </body>
 </html>
