@@ -1,6 +1,8 @@
 const statusEl = document.getElementById('status');
 const testConnectionBtn = document.getElementById('testConnection');
 const crawlToggle = document.getElementById('crawlToggle');
+const importFileInput = document.getElementById('importFile');
+const importStatusEl = document.getElementById('importStatus');
 const CRAWL_ORIGINS = ['https://*/*', 'http://*/*'];
 
 function applyI18n() {
@@ -55,4 +57,76 @@ crawlToggle.addEventListener('change', () => {
   } else {
     chrome.permissions.remove({ origins: CRAWL_ORIGINS });
   }
+});
+
+// ---------------------------------------------------------------- import
+//
+// Plain text, one URL per line (blank lines and "#" comments ignored,
+// duplicates dropped) — deliberately simple, matching what most "export my
+// bookmarks/reading list as a text file" tools produce. Each valid URL goes
+// through the exact same path as the "+" button (client-side metadata
+// extraction isn't possible here — no tab to read — so it always falls
+// back to the mini-crawler, if the permission above is granted; otherwise
+// the URL itself is used as the title, same as any other add would).
+function parseUrlList(text) {
+  const seen = new Set();
+  const urls = [];
+  for (const rawLine of text.split(/\r?\n/)) {
+    const line = rawLine.trim();
+    if (!line || line.startsWith('#')) continue;
+    let parsed;
+    try {
+      parsed = new URL(line);
+    } catch {
+      continue; // not an absolute URL — silently skipped, counted at the end
+    }
+    if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') continue;
+    if (seen.has(parsed.href)) continue;
+    seen.add(parsed.href);
+    urls.push(parsed.href);
+  }
+  return urls;
+}
+
+importFileInput.addEventListener('change', async () => {
+  const file = importFileInput.files[0];
+  importFileInput.value = ''; // allow re-selecting the same file later
+  if (!file) return;
+
+  const text = await file.text();
+  const urls = parseUrlList(text);
+  if (urls.length === 0) {
+    importStatusEl.textContent = chrome.i18n.getMessage('importNoUrls');
+    return;
+  }
+
+  let added = 0;
+  let failed = 0;
+  // Sequential, not parallel: each add is its own Native Messaging call
+  // (a fresh bridge process per chrome.runtime.sendMessage, see
+  // native-client.js) — awaiting one at a time keeps that to one at a time
+  // too, instead of spawning dozens of bridge processes at once.
+  for (let i = 0; i < urls.length; i++) {
+    importStatusEl.textContent = chrome.i18n
+      .getMessage('importProgress')
+      .replace('{current}', i + 1)
+      .replace('{total}', urls.length);
+    try {
+      const response = await chrome.runtime.sendMessage({
+        type: 'add-bookmark',
+        url: urls[i],
+        title: null,
+        tabId: null,
+        silent: true,
+      });
+      if (response && response.success) added++; else failed++;
+    } catch {
+      failed++;
+    }
+  }
+
+  importStatusEl.textContent = chrome.i18n
+    .getMessage('importDone')
+    .replace('{added}', added)
+    .replace('{failed}', failed);
 });

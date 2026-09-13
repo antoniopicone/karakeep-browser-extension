@@ -297,9 +297,12 @@ async function tryExtractFromTab(tabId) {
   }
 }
 
-async function addBookmarkFromUrl(rawUrl, title, tabId) {
+// `silent` skips the system notification (success/error) but keeps the
+// panel-refresh/badge side effects — used by the bulk import below, so
+// importing a file with a hundred URLs doesn't pop a hundred notifications.
+async function addBookmarkFromUrl(rawUrl, title, tabId, { silent = false } = {}) {
   if (!rawUrl || !/^https?:\/\//i.test(rawUrl)) {
-    notify(chrome.i18n.getMessage('notifyInvalidTitle'), chrome.i18n.getMessage('notifyInvalidBody'));
+    if (!silent) notify(chrome.i18n.getMessage('notifyInvalidTitle'), chrome.i18n.getMessage('notifyInvalidBody'));
     return false;
   }
 
@@ -323,7 +326,7 @@ async function addBookmarkFromUrl(rawUrl, title, tabId) {
     await syncdWrite(url, JSON.stringify(value));
     await markServiceReachable();
 
-    notify(chrome.i18n.getMessage('notifyAddedTitle'), value.title);
+    if (!silent) notify(chrome.i18n.getMessage('notifyAddedTitle'), value.title);
 
     // An open panel can draw the entry right away with real data, without
     // waiting for either the network or the mini-crawler; otherwise this
@@ -357,10 +360,12 @@ async function addBookmarkFromUrl(rawUrl, title, tabId) {
     return true;
   } catch (err) {
     console.error('Adding bookmark failed:', err);
-    if (isServiceNotConfiguredError(err)) {
-      notify(chrome.i18n.getMessage('notifyNotConfiguredTitle'), chrome.i18n.getMessage('notifyNotConfiguredBody'));
-    } else {
-      notify(chrome.i18n.getMessage('notifyErrorTitle'), chrome.i18n.getMessage('notifyErrorBody'));
+    if (!silent) {
+      if (isServiceNotConfiguredError(err)) {
+        notify(chrome.i18n.getMessage('notifyNotConfiguredTitle'), chrome.i18n.getMessage('notifyNotConfiguredBody'));
+      } else {
+        notify(chrome.i18n.getMessage('notifyErrorTitle'), chrome.i18n.getMessage('notifyErrorBody'));
+      }
     }
     return false;
   }
@@ -400,10 +405,11 @@ chrome.commands.onCommand.addListener(async (command) => {
 
 chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
   if (msg && msg.type === 'add-bookmark') {
-    // The "+" button in the side panel delegates the add here: it reuses
-    // the same logic (client-side extraction + mini-crawler fallback)
-    // instead of duplicating it in the panel's context.
-    addBookmarkFromUrl(msg.url, msg.title, msg.tabId)
+    // The "+" button in the side panel, and the bulk file import in
+    // options.js, both delegate the add here: they reuse the same logic
+    // (client-side extraction + mini-crawler fallback) instead of
+    // duplicating it in their own context.
+    addBookmarkFromUrl(msg.url, msg.title, msg.tabId, { silent: !!msg.silent })
       .then((success) => sendResponse({ success }))
       .catch(() => sendResponse({ success: false }));
     return true; // async response
