@@ -11,18 +11,9 @@
     color: #1f2430;
   }
   h1 { font-size: 18px; }
-  label { display: block; margin-top: 16px; font-size: 13px; font-weight: 600; }
-  input {
-    width: 100%;
-    padding: 8px 10px;
-    margin-top: 6px;
-    border: 1px solid #d0d5dd;
-    border-radius: 6px;
-    font-size: 14px;
-    box-sizing: border-box;
-  }
+  h2 { font-size: 14px; margin-top: 28px; }
   button {
-    margin-top: 20px;
+    margin-top: 12px;
     padding: 9px 18px;
     background: #2563eb;
     color: white;
@@ -36,21 +27,32 @@
   .ok { color: #067647; }
   .err { color: #b42318; }
   .hint { font-size: 12px; color: #667085; margin-top: 4px; }
+  .checkbox-row { display: flex; align-items: center; gap: 8px; margin-top: 22px; }
+  .checkbox-row input { width: auto; margin: 0; }
+  .checkbox-row label { display: inline; margin: 0; font-weight: 600; font-size: 13px; }
+  code { background: #f2f4f7; padding: 1px 5px; border-radius: 4px; font-size: 12px; }
 </style>
 </head>
 <body>
   <h1 data-i18n="optionsTitle"></h1>
 
-  <label for="baseUrl" data-i18n="baseUrlLabel"></label>
-  <input id="baseUrl" type="text" placeholder="https://karakeep.tuodominio.it" />
-  <div class="hint" data-i18n="baseUrlHint"></div>
-
-  <label for="apiKey" data-i18n="apiKeyLabel"></label>
-  <input id="apiKey" type="password" data-i18n-placeholder="apiKeyPlaceholder" />
-
-  <button id="save" data-i18n="saveBtn"></button>
+  <h2 data-i18n="connectionSectionTitle"></h2>
+  <p class="hint" data-i18n="connectionSectionHint"></p>
+  <button id="testConnection" data-i18n="testConnectionBtn"></button>
   <div id="status"></div>
 
+  <div class="checkbox-row">
+    <input id="crawlToggle" type="checkbox" />
+    <label for="crawlToggle" data-i18n="crawlToggleLabel"></label>
+  </div>
+  <div class="hint" data-i18n="crawlToggleHint"></div>
+
+  <h2 data-i18n="importSectionTitle"></h2>
+  <p class="hint" data-i18n="importSectionHint"></p>
+  <input id="importFile" type="file" accept=".txt,text/plain" />
+  <div id="importStatus" class="hint"></div>
+
+  <script src="native-client.js"></script>
   <script src="options.js"></script>
 </body>
 </html>

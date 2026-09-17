@@ -1,0 +1,3 @@
+# Rust build output (native/reading-list-syncd) — never commit compiled
+# binaries or dependency artifacts.
+/native/reading-list-syncd/target/

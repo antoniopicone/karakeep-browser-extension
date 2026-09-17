@@ -1,10 +1,11 @@
 {
   "manifest_version": 3,
   "name": "__MSG_extName__",
-  "version": "1.1.0",
+  "version": "2.0.0",
   "description": "__MSG_extDescription__",
   "default_locale": "it",
-  "permissions": ["storage", "sidePanel", "alarms", "tabs", "contextMenus", "notifications", "scripting", "activeTab"],
+  "key": "MIIBIjANBgkqhkiG9w0BAQEFAAOCAQ8AMIIBCgKCAQEAsynCW9LGolb40gCX4+ciFDWBn1bEbaDS5dy6WNH+gbkNIcTHDbqsg87BGdk4IidAZN4GM0rPMB67R3UMjOxNp6zcOKJYzirHL+oFhAyzX+Hp0+BnXkC7ADORAY2AbKWPBi8zOa8LppJgcS9ZNUnG4kv/S0hN+w/tWhr4eZERLyeXq5WpgQkMheuzJyaaLKd1eqwOcHAOcf/+gcqCiyZ8K+ZQ9V50hIOkXo4k9AaMKZYLocYEDOQ+tR63ZGk1lSzGXO3sa+mShP2ZaOWAgf7KEOZEYnz7rg340SFoL3x8WyUeQCJLYCWGw+idFLyNsmg1ul3/w39I9va1DHSwBelMJwIDAQAB",
+  "permissions": ["storage", "sidePanel", "alarms", "tabs", "contextMenus", "notifications", "scripting", "activeTab", "nativeMessaging"],
   "optional_host_permissions": ["https://*/*", "http://*/*"],
   "commands": {
     "add-current-tab": {

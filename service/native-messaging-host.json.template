@@ -1,0 +1,7 @@
+{
+  "name": "com.antoniopicone.reading_list_syncd",
+  "description": "Reading List extension — bridge to its embedded sync daemon",
+  "path": "__PATH__",
+  "type": "stdio",
+  "allowed_origins": ["chrome-extension://__EXT_ID__/"]
+}

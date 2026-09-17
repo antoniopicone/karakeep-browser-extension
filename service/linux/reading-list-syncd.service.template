@@ -1,0 +1,13 @@
+[Unit]
+Description=reading-list-syncd — embedded peer-to-peer sync daemon for the Reading List extension
+After=network-online.target tailscaled.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=__EXEC_START__
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=default.target
